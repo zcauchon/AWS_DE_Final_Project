@@ -22,6 +22,7 @@ class CdkStack(Stack):
         glue_ServiceUrl = 'glue.amazonaws.com'
         glue_role_name = 'glue-crawler-role'
         glue_job_process = 'glue_process_crime_data'
+        glue_process_crime_wf = 'glue_process_crime_wf'
         lambda_recent_data_name = 'request_recent_crime_data'
 
         #s3 bucket
@@ -97,13 +98,11 @@ class CdkStack(Stack):
                 script_location=f's3://{source_bucket_name}/scripts/process_crime_data.py'
             ),
             role='arn:aws:iam::896639149083:role/AWSGlueServiceRoleDefault',
-            allocated_capacity=2,
             connections=None,
             execution_property=glue.CfnJob.ExecutionPropertyProperty(
                 max_concurrent_runs=1
             ),
             glue_version='3.0',
-            max_capacity=4,
             max_retries=1,
             name=glue_job_process,
             notification_property=None,
@@ -111,6 +110,68 @@ class CdkStack(Stack):
             timeout=2880,
             worker_type='G.1X'
         )
+
+        # Glue WF
+        glue_crime_workflow = glue.CfnWorkflow(self, glue_process_crime_wf,
+            name=glue_process_crime_wf,
+        )
+
+        # trigger from EventBidge when s3:PutItem in input folder or when lambda completes
+        glue_initial_tgr = glue.CfnTrigger(self, 'glue_crime_initial_tgr',
+            name='glue_crime_initial_tgr',
+            type='SCHEDULED',
+            start_on_creation=False,
+            actions=[glue.CfnTrigger.ActionProperty(
+                # crawler builds schema on input folder
+                crawler_name=glue_source_crawler.name
+            )],
+            # for now schedule wiht cron - : change to event driven ASAP
+            schedule='cron(0 12 ? * MON-FRI *)',
+            workflow_name=glue_crime_workflow.name
+        )
+
+        # trigger job on input cawler success
+        glue_input_crawler_tgr = glue.CfnTrigger(self, 'glue_input_crawler_tgr',
+            name='glue_input_crawler_tgr',
+            type='CONDITIONAL',
+            start_on_creation=False,
+            actions=[glue.CfnTrigger.ActionProperty(
+                # job process file
+                job_name=glue_job_process_data.name
+            )],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                conditions=[glue.CfnTrigger.ConditionProperty(
+                    crawler_name=glue_source_crawler.name,
+                    crawl_state='SUCCEEDED',
+                    logical_operator='EQUALS'
+                )]
+            ),
+            workflow_name=glue_crime_workflow.name
+        )
+
+        # trigger on job success
+        glue_processed_crawler_tgr = glue.CfnTrigger(self, 'glue_processed_crawler_tgr',
+            name='glue_processed_crawler_tgr',
+            type='CONDITIONAL',
+            start_on_creation=False,
+            actions=[glue.CfnTrigger.ActionProperty(
+                # crawler runs on processed folder
+                crawler_name=glue_processed_crawler.name
+            )],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                conditions=[glue.CfnTrigger.ConditionProperty(
+                    job_name=glue_job_process_data.name,
+                    state='SUCCEEDED',
+                    logical_operator='EQUALS'
+                )]
+            ),
+            workflow_name=glue_crime_workflow.name
+        )
+
+        #make tgrs depend on wf
+        glue_initial_tgr.add_depends_on(glue_crime_workflow)
+        glue_input_crawler_tgr.add_depends_on(glue_crime_workflow)
+        glue_processed_crawler_tgr.add_depends_on(glue_crime_workflow)
 
         #Grant crawler read/write access to source bucket
         source_bucket.grant_read(glue_role)
