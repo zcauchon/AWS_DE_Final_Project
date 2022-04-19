@@ -1,4 +1,5 @@
 from aws_cdk import (
+    Duration,
     aws_iam as iam,
     aws_s3 as s3,
     Stack,
@@ -6,8 +7,7 @@ from aws_cdk import (
     aws_glue_alpha as glue2,
     aws_lambda as lambda_,
     aws_events as events,
-    aws_events_targets as targets,
-    aws_lambda_destinations as destinations
+    aws_events_targets as targets
 )
 from constructs import Construct
 
@@ -26,7 +26,8 @@ class CdkStack(Stack):
         lambda_recent_data_name = 'request_recent_crime_data'
 
         #s3 bucket
-        source_bucket = s3.Bucket(self, source_bucket_name, versioned=False, bucket_name=source_bucket_name)
+        # source_bucket = s3.Bucket(self, source_bucket_name, versioned=False, bucket_name=source_bucket_name)
+        source_bucket = s3.Bucket.from_bucket_arn(self, source_bucket_name, bucket_arn='arn:aws:s3:::bah2-final-project')
 
         event_api_req = events.Rule(self, 'event-api-req', 
             schedule=events.Schedule.expression('cron(0 10 ? * MON-FRI *)'))
@@ -37,12 +38,11 @@ class CdkStack(Stack):
             function_name=lambda_recent_data_name,
             runtime=lambda_.Runtime.PYTHON_3_9,
             handler="get_data_api.request_recent_crime_data",
+            timeout=Duration.seconds(180),
             code=lambda_.Code.from_bucket(bucket=source_bucket, key='scripts/get_data_api.zip'),
             layers=[requestLayer]
-            #,on_success=destinations.EventBridgeDestination()
         )
-        #allow lambda to write EventBirdge on success
-        lambda_get_data.role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name('CloudWatchEventsFullAccess'))
+        lambda_get_data.role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name('service-role/AWSGlueServiceRole'))
 
         event_api_req.add_target(targets.LambdaFunction(lambda_get_data))
 
@@ -73,7 +73,8 @@ class CdkStack(Stack):
             schema_change_policy = glue.CfnCrawler.SchemaChangePolicyProperty(
                 delete_behavior="DEPRECATE_IN_DATABASE",
                 update_behavior="UPDATE_IN_DATABASE"
-            )
+            ),
+            configuration='{"Version": 1.0,"Grouping": {"TableGroupingPolicy": "CombineCompatibleSchemas" }}'
         )
 
         glue_processed_crawler = glue.CfnCrawler(self, processed_crawler_name,
@@ -88,7 +89,8 @@ class CdkStack(Stack):
             schema_change_policy = glue.CfnCrawler.SchemaChangePolicyProperty(
                 delete_behavior="DEPRECATE_IN_DATABASE",
                 update_behavior="UPDATE_IN_DATABASE"
-            )
+            ),
+            configuration='{"Version": 1.0,"Grouping": {"TableGroupingPolicy": "CombineCompatibleSchemas" }}'
         )
 
         glue_job_process_data = glue.CfnJob(self, glue_job_process,
@@ -102,6 +104,9 @@ class CdkStack(Stack):
             execution_property=glue.CfnJob.ExecutionPropertyProperty(
                 max_concurrent_runs=1
             ),
+            default_arguments={
+                "--job-bookmark-option":"job-bookmark-enable"
+            },
             glue_version='3.0',
             max_retries=1,
             name=glue_job_process,
@@ -119,14 +124,13 @@ class CdkStack(Stack):
         # trigger from EventBidge when s3:PutItem in input folder or when lambda completes
         glue_initial_tgr = glue.CfnTrigger(self, 'glue_crime_initial_tgr',
             name='glue_crime_initial_tgr',
-            type='SCHEDULED',
-            start_on_creation=False,
+            #type='SCHEDULED',
+            type='ON_DEMAND',
             actions=[glue.CfnTrigger.ActionProperty(
                 # crawler builds schema on input folder
                 crawler_name=glue_source_crawler.name
             )],
-            # for now schedule wiht cron - : change to event driven ASAP
-            schedule='cron(0 12 ? * MON-FRI *)',
+            #schedule='cron(0 12 ? * MON-FRI *)',
             workflow_name=glue_crime_workflow.name
         )
 
@@ -134,7 +138,7 @@ class CdkStack(Stack):
         glue_input_crawler_tgr = glue.CfnTrigger(self, 'glue_input_crawler_tgr',
             name='glue_input_crawler_tgr',
             type='CONDITIONAL',
-            start_on_creation=False,
+            start_on_creation=True,
             actions=[glue.CfnTrigger.ActionProperty(
                 # job process file
                 job_name=glue_job_process_data.name
@@ -153,7 +157,7 @@ class CdkStack(Stack):
         glue_processed_crawler_tgr = glue.CfnTrigger(self, 'glue_processed_crawler_tgr',
             name='glue_processed_crawler_tgr',
             type='CONDITIONAL',
-            start_on_creation=False,
+            start_on_creation=True,
             actions=[glue.CfnTrigger.ActionProperty(
                 # crawler runs on processed folder
                 crawler_name=glue_processed_crawler.name
@@ -168,13 +172,31 @@ class CdkStack(Stack):
             workflow_name=glue_crime_workflow.name
         )
 
-        #make tgrs depend on wf
+        # event_process_source_file = events.CfnRule(self, 'event_crime_wf_tgr',
+        #     event_pattern=events.EventPattern(
+        #         source = ["aws.s3"],
+        #         detail_type = ["Object Created"],
+        #         detail = {
+        #             "bucket": {
+        #             "name": ["input"]
+        #             }
+        #         }
+        #     ),
+        #     targets=[events.CfnRule.TargetProperty(
+        #         # Glue isnt supported???
+        #     )]
+        # )
+        
+        #add wf dependencies
         glue_initial_tgr.add_depends_on(glue_crime_workflow)
+        glue_initial_tgr.add_depends_on(glue_source_crawler)
         glue_input_crawler_tgr.add_depends_on(glue_crime_workflow)
+        glue_input_crawler_tgr.add_depends_on(glue_job_process_data)
+        glue_input_crawler_tgr.add_depends_on(glue_source_crawler)
         glue_processed_crawler_tgr.add_depends_on(glue_crime_workflow)
+        glue_processed_crawler_tgr.add_depends_on(glue_processed_crawler)
+        glue_processed_crawler_tgr.add_depends_on(glue_job_process_data)
 
-        #Grant crawler read/write access to source bucket
+        #Grant read/write access to source bucket
         source_bucket.grant_read(glue_role)
         source_bucket.grant_write(lambda_get_data)
-        
-        #glue job

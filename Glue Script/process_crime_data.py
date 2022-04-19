@@ -22,8 +22,7 @@ S3bucket_node0 = glueContext.create_dynamic_frame.from_catalog(database="glue_cr
 df = (S3bucket_node0.toDF().withColumn("new_date", to_date("date", "MM/dd/yyyy hh:mm:ss a")))
 df2 = (df.withColumn("month", month("new_date")))
 df3 = (df2.withColumn("day", dayofmonth("new_date")))
-df4 = DropFields.apply(df3, ["new_date"])
-S3bucket_node1 = DynamicFrame.fromDF(df4, glueContext, "S3bucket_node0")
+S3bucket_node1 = DynamicFrame.fromDF(df3, glueContext, "S3bucket_node0")
 
 # Script generated for node S3 bucket
 # format_options={"compression": "snappy"},
