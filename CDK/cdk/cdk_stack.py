@@ -25,6 +25,13 @@ class CdkStack(Stack):
         glue_process_crime_wf = 'glue_process_crime_wf'
         lambda_recent_data_name = 'request_recent_crime_data'
 
+        source_crawler_name_neighborhood = 'glue_crawler_neighborhood'
+        glue_db_name_neighborhood = 'glue_neighborhood_db'
+        glue_managed_policy_neighborhood = 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+        glue_ServiceUrl_neighborhood = 'glue.amazonaws.com'
+        glue_role_name_neighborhood = 'glue_crawler_neighborhood_role'
+
+
         #s3 bucket
         # source_bucket = s3.Bucket(self, source_bucket_name, versioned=False, bucket_name=source_bucket_name)
         source_bucket = s3.Bucket.from_bucket_arn(self, source_bucket_name, bucket_arn='arn:aws:s3:::bah2-final-project')
@@ -76,6 +83,31 @@ class CdkStack(Stack):
             ),
             configuration='{"Version": 1.0,"Grouping": {"TableGroupingPolicy": "CombineCompatibleSchemas" }}'
         )
+
+        # Create Crawlers for Neighborhood code
+        
+        #create glue db
+        glue_db_neighborhood = glue2.Database(self, glue_db_name_neighborhood,
+            database_name=glue_db_name_neighborhood
+        )
+
+        #Crawler        
+        glue_source_crawler_neighborhood = glue.CfnCrawler(self, source_crawler_name_neighborhood,
+            name=source_crawler_name_neighborhood,
+            role=glue_role.role_name,
+            targets=glue.CfnCrawler.TargetsProperty(
+                s3_targets=[glue.CfnCrawler.S3TargetProperty(
+                    path=f's3://{source_bucket_name}/supporting/'
+                )]
+            ),
+            database_name=glue_db_neighborhood.database_name,
+            schema_change_policy = glue.CfnCrawler.SchemaChangePolicyProperty(
+                delete_behavior="DEPRECATE_IN_DATABASE",
+                update_behavior="UPDATE_IN_DATABASE"
+            )
+        )
+
+        
 
         glue_processed_crawler = glue.CfnCrawler(self, processed_crawler_name,
             name=processed_crawler_name,
