@@ -32,9 +32,9 @@ S3bucket_node2 = glueContext.write_dynamic_frame.from_options(
     format="glueparquet",
     connection_options={
         "path": "s3://bah2-final-project/processed/",
-        "partitionKeys": ["year", "month", "day"],
+        "partitionKeys": ["year", "month"],
     },
-    format_options={"compression": "snappy"},
+    format_options={"compression": "uncompressed"},
     transformation_ctx="S3bucket_node2",
 )
 

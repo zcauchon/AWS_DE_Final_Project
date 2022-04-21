@@ -8,7 +8,7 @@ def request_recent_crime_data(event, context):
     Will call API endpoint to find latest data based on previous max ID saved in DDB
     '''
     #Find date from 7 days ago
-    delta = timedelta(days=5)
+    delta = timedelta(days=1)
     target = (datetime.now() - delta).strftime('%Y-%m-%d')
     response = requests.get(f'https://data.cityofchicago.org/resource/ijzp-q8t2.csv?$where=updated_on > "{target}T00:00:00.000"')
     if response.ok:
@@ -21,10 +21,6 @@ def request_recent_crime_data(event, context):
                     Body=response_text,
                     Bucket='bah2-final-project',
                     Key=f'input/recent_source_data_{target}.csv',
-                )
-                glue_client = boto3.client('glue')
-                response = glue_client.start_trigger(
-                    Name='glue_crime_initial_tgr'
                 )
             except ClientError as e:
                 print(e)

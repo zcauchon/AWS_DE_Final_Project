@@ -7,7 +7,8 @@ from aws_cdk import (
     aws_glue_alpha as glue2,
     aws_lambda as lambda_,
     aws_events as events,
-    aws_events_targets as targets
+    aws_events_targets as targets,
+    aws_cloudtrail as cloudtrail
 )
 from constructs import Construct
 
@@ -23,7 +24,9 @@ class CdkStack(Stack):
         glue_role_name = 'glue-crawler-role'
         glue_job_process = 'glue_process_crime_data'
         glue_process_crime_wf = 'glue_process_crime_wf'
+        glue_tgr_initial_name = 'glue_crime_initial_tgr'
         lambda_recent_data_name = 'request_recent_crime_data'
+
 
         source_crawler_name_neighborhood = 'glue_crawler_neighborhood'
         glue_db_name_neighborhood = 'glue_neighborhood_db'
@@ -33,8 +36,9 @@ class CdkStack(Stack):
 
 
         #s3 bucket
-        # source_bucket = s3.Bucket(self, source_bucket_name, versioned=False, bucket_name=source_bucket_name)
+        # source_bucket = s3.Bucket(self, source_bucket_name, versioned=False, bucket_name=source_bucket_name, event_bridge_enabled=True)
         source_bucket = s3.Bucket.from_bucket_arn(self, source_bucket_name, bucket_arn='arn:aws:s3:::bah2-final-project')
+        #cfnBucket.addPropertyOverride('NotificationConfiguration.EventBridgeConfiguration.EventBridgeEnabled', true);
 
         event_api_req = events.Rule(self, 'event-api-req', 
             schedule=events.Schedule.expression('cron(0 10 ? * MON-FRI *)'))
@@ -154,10 +158,10 @@ class CdkStack(Stack):
         )
 
         # trigger from EventBidge when s3:PutItem in input folder or when lambda completes
-        glue_initial_tgr = glue.CfnTrigger(self, 'glue_crime_initial_tgr',
-            name='glue_crime_initial_tgr',
-            #type='SCHEDULED',
-            type='ON_DEMAND',
+        glue_initial_tgr = glue.CfnTrigger(self, glue_tgr_initial_name,
+            name=glue_tgr_initial_name,
+            #type='SCHEDULED',ON_DEMAND
+            type='EVENT',
             actions=[glue.CfnTrigger.ActionProperty(
                 # crawler builds schema on input folder
                 crawler_name=glue_source_crawler.name
@@ -204,20 +208,52 @@ class CdkStack(Stack):
             workflow_name=glue_crime_workflow.name
         )
 
-        # event_process_source_file = events.CfnRule(self, 'event_crime_wf_tgr',
-        #     event_pattern=events.EventPattern(
-        #         source = ["aws.s3"],
-        #         detail_type = ["Object Created"],
-        #         detail = {
-        #             "bucket": {
-        #             "name": ["input"]
-        #             }
-        #         }
-        #     ),
-        #     targets=[events.CfnRule.TargetProperty(
-        #         # Glue isnt supported???
-        #     )]
-        # )
+        event_process_source_file = events.CfnRule(self, 'event_crime_wf_tgr',
+            # event_pattern=events.EventPattern(
+            #     source = ["aws.s3"],
+            #     detail_type = ["Object Created"],
+            #     detail = {
+            #         "bucket": {
+            #             "name": ["bah2-final-project"]
+            #         },
+            #         "object": {
+            #             "key": [{"prefix":"input/"}]
+            #         }
+            #     }
+            # ),
+            #try to run via cloudtrail events
+            event_pattern={
+                "source": ["aws.s3"],
+                "detail-type": ["AWS API Call via CloudTrail"],
+                "detail": {
+                    "eventSource": ["s3.amazonaws.com"],
+                    "eventName": ["PutObject", "CompleteMultipartUpload", "CopyObject", "RestoreObject"],
+                    "requestParameters": {
+                        "bucketName": ["bah2-final-project"],
+                        "key": [{"prefix":"input/"}]
+                    }
+                }
+            },
+            targets=[events.CfnRule.TargetProperty(
+                arn=f'arn:aws:glue:us-east-1:896639149083:workflow/{glue_crime_workflow.name}',
+                # arn = glue_crime_workflow.get_att('arn').to_string(),
+                id=glue_process_crime_wf,
+                role_arn='arn:aws:iam::896639149083:role/service-role/Amazon_EventBridge_Invoke_Glue_143070630'
+            )]
+        )
+
+        s3_trail = cloudtrail.Trail(self, "s3_trail",
+            enable_file_validation=False,
+            
+        )
+        s3_trail.add_s3_event_selector(s3_selector=[
+            cloudtrail.S3EventSelector(
+                bucket=source_bucket, 
+                object_prefix='input/'                
+            )],
+            read_write_type=cloudtrail.ReadWriteType.WRITE_ONLY,
+            include_management_events=False
+        )
         
         #add wf dependencies
         glue_initial_tgr.add_depends_on(glue_crime_workflow)
