@@ -8,12 +8,15 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_events as events,
     aws_events_targets as targets,
-    aws_cloudtrail as cloudtrail
+    aws_cloudtrail as cloudtrail,
+    aws_athena as athena
 )
 from constructs import Construct
+from pathlib import Path
+import re
+
 
 class CdkStack(Stack):
-
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         source_bucket_name               = 'bah2-final-project'
@@ -32,7 +35,9 @@ class CdkStack(Stack):
         glue_managed_policy_neighborhood = 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
         glue_ServiceUrl_neighborhood     = 'glue.amazonaws.com'
         glue_role_name_neighborhood      = 'glue_crawler_neighborhood_role'
-
+        athena_query_dir                 = "./cdk/athena_queries"
+        athena_eb_rule_name              = "athena_query_rule"
+        athena_lambda_func_name          = "chris_executes_queries"
 
         #s3 bucket
         # source_bucket = s3.Bucket(self, source_bucket_name, versioned=False, bucket_name=source_bucket_name, event_bridge_enabled=True)
@@ -299,32 +304,64 @@ class CdkStack(Stack):
         source_bucket.grant_read(glue_role)
         source_bucket.grant_write(lambda_get_data)
 
-
-        # Athena queries
+        # Grab athena queries from txt files
         queries = []
         for p in Path(athena_query_dir).iterdir():
             if p.is_file() and p.parts[-1][0] != '.':
                 fname = p.parts[-1]
 
                 qname = re.sub(r"\..*", r"", fname)
-                if re.search(r"^dependency", qname):
-                    dependency_queries.append(tuple((qname,p)))
-                else:
-                    final_queries.append(tuple((qname,p)))
+                queries.append(tuple((qname, p)))
 
 
-        def load_queries(q_list):
-            constructs = []
-            for q_name, q_file_path in q_list:
-                with open(q_file_path) as f:
-                    query_string = "".join(f.readlines())
-                constructs.append(athena.CfnNamedQuery(self, q_name,
-                            database=glue_db_name,
-                            query_string=query_string
-                            ))  
-            return constructs
+        # Create NamedQueries from strings
+        q_constructs = []
+        for q_name, q_file_path in queries:
+            with open(q_file_path) as f:
+                query_string = "".join(f.readlines())
+            q_constructs.append(
+                athena.CfnNamedQuery(self,
+                                     q_name,
+                                     database=glue_db_name,
+                                     query_string=query_string))
 
 
 
-        q_constructs = load_queries(queries)
+        ## Lambda to execute queries
+        lambda_execute_queries = lambda_.Function(
+            self,
+            athena_lambda_func_name,
+            function_name=athena_lambda_func_name,
+            runtime=lambda_.Runtime.PYTHON_3_9,
+            handler="execute_queries.execute_queries_handler",
+            timeout=Duration.seconds(180),
+            code=lambda_.Code.from_bucket(bucket=source_bucket,
+                                          key='scripts/execute_queries.zip'))
 
+        ## IAM Policy for lambda
+        lambda_execute_queries.role.attach_inline_policy(## principle of MOST access ;)
+            iam.Policy(self,
+                       "query-execution-policy",
+                       statements=[
+                           iam.PolicyStatement(actions=["glue:*", "athena:*", "s3:*"],
+                                               resources=["*"])
+                       ]))
+
+        ## EB rule to trigger lambda
+        event_execute_queries = events.CfnRule(
+            self,
+            athena_eb_rule_name,
+            event_pattern={
+                "source": ["aws.glue"],
+                "detail-type": ["Glue Crawler State Change"],
+                "detail": {
+                    "crawlerName": [processed_crawler_name],
+                    "state": ["Succeeded"]
+                }
+            },
+            targets=[
+                events.CfnRule.TargetProperty(
+                    arn=lambda_execute_queries.function_arn,
+                    id=athena_lambda_func_name,
+                )
+            ])
