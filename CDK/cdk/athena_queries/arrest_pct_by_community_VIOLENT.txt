@@ -1,0 +1,24 @@
+CREATE OR REPLACE VIEW arrest_pct_by_community_VIOLENT AS SELECT 
+    tr.community_area,
+    ta.tot_arrests,
+    tr.tot_reports,
+    ROUND(CAST(ta.tot_arrests AS double) / CAST(tr.tot_reports as double)*100, 2) AS arrest_pct 
+FROM 
+(
+SELECT 
+    COUNT(*) AS tot_reports,
+    community_area
+FROM "glue_crime_db"."dependency1_violent_crimes" 
+GROUP BY community_area
+) tr INNER JOIN
+    (
+    SELECT
+        COUNT(*) AS tot_arrests,
+        community_area
+    FROM "glue_crime_db"."dependency1_violent_crimes" 
+    WHERE arrest = True
+    GROUP BY community_area
+    ) ta
+ON tr.community_area = ta.community_area
+ORDER BY tot_reports DESC
+LIMIT 15;

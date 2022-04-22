@@ -1,0 +1,10 @@
+CREATE OR REPLACE VIEW dependency1_violent_crimes AS
+SELECT 
+    *
+FROM "glue_crime_db"."processed" 
+WHERE 
+     (primary_type = 'ROBBERY' AND description LIKE '%ARMED%') OR
+      primary_type = 'ASSAULT' OR
+      primary_type = 'BATTERY' OR
+      primary_type = 'HOMICIDE' OR
+      primary_type = 'CRIMINAL SEXUAL ASSAULT'

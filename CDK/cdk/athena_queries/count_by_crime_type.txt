@@ -1,0 +1,7 @@
+CREATE OR REPLACE VIEW count_by_crime_type AS 
+SELECT 
+    primary_type || ' - ' || description AS crime_type,
+    COUNT(*) AS "count"
+FROM "glue_crime_db"."processed"
+GROUP BY  primary_type || ' - ' || description
+

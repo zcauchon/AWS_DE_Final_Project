@@ -1,0 +1,9 @@
+ CREATE OR REPLACE VIEW fixed_dates_violent AS
+ SELECT
+    date_format("date_timestamp", '%W') AS day_of_week, 
+    DAY_OF_WEEK("date_timestamp") AS day_of_week_num,
+    *
+ FROM (SELECT 
+    date_parse("date", '%m/%d/%Y %T %p') AS "date_timestamp",
+    *
+FROM "glue_crime_db"."dependency1_violent_crimes")
