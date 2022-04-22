@@ -301,3 +301,30 @@ class CdkStack(Stack):
 
 
         # Athena queries
+        queries = []
+        for p in Path(athena_query_dir).iterdir():
+            if p.is_file() and p.parts[-1][0] != '.':
+                fname = p.parts[-1]
+
+                qname = re.sub(r"\..*", r"", fname)
+                if re.search(r"^dependency", qname):
+                    dependency_queries.append(tuple((qname,p)))
+                else:
+                    final_queries.append(tuple((qname,p)))
+
+
+        def load_queries(q_list):
+            constructs = []
+            for q_name, q_file_path in q_list:
+                with open(q_file_path) as f:
+                    query_string = "".join(f.readlines())
+                constructs.append(athena.CfnNamedQuery(self, q_name,
+                            database=glue_db_name,
+                            query_string=query_string
+                            ))  
+            return constructs
+
+
+
+        q_constructs = load_queries(queries)
+
